@@ -16,7 +16,7 @@ Debug 产物：`app/build/outputs/apk/debug/app-debug.apk`。Release 开启代�
 
 动态读取默认数据 subscriptionId，调用 `getAllowedNetworkTypesForReason(subId, ALLOWED_NETWORK_TYPES_REASON_USER)` 取得完整 `Long`。开启只 `mask or NETWORK_TYPE_BITMASK_NR`，关闭只 `mask and NETWORK_TYPE_BITMASK_NR.inv()`；通过 `setAllowedNetworkTypesForReason()` 写回，保留所有非 NR 位，包括 LTE_CA 及未知高位。
 
-操作在单线程执行，界面和磁贴共享防重入门闩。RootService 启动时只开放 ITelephony 类的隐藏接口访问；getter/setter 按 LuckyTool 直接调用，不以普通反射查找 setter 作为兼容门槛。刷新仅读取，实际切换检查 setter 的 boolean 与完整读回值，默认卡变化时中止或报告错误。链接错误转换为可见诊断；真实调用找不到方法时显示系统接口签名及豁免状态。日志记录 root PID 与断连事件，标签 **5GSwitch**。写入时 Binder 死亡不会自动重放 toggle，需重新检测实际状态；磁贴失败显示不可用，可打开应用查看诊断。
+操作在单线程执行，界面和磁贴共享防重入门闩。RootService 启动时只开放 ITelephony 类的隐藏接口访问，不以普通反射查找 setter 作为刷新门槛。写入时精确适配 `(int,int,long)` 和设备实际观察到的 `(int,int,long,String)` 两种 boolean 方法，四参数版本传本应用的 `packageName`，不硬编码 Binder 事务编号；字符串的厂商语义尚未由系统源码确认，仍需真机验证。不走会归一化 LTE_CA 位的 `TelephonyManager` 写入封装，完整目标掩码直接传给 Binder。检查实际 boolean 返回与完整读回值；刷新仅读取，默认卡变化时中止或报告错误。链接错误转换为可见诊断；真实调用找不到方法时显示系统接口签名及豁免状态。日志记录 root PID、实际签名、传入包身份与断连事件，标签 **5GSwitch**。写入时 Binder 死亡不会自动重放 toggle，需重新检测实际状态；磁贴失败显示不可用，可打开应用查看诊断。
 
 启动使用 libsu 独立 `su` 会话并通过 `/system/bin/id -u` 验证 UID 0，不自动退回普通 `sh`。启动失败保留异常原因，下一次重试重新创建；只有实际 UID 非 0 才显示 Root 不可用。已验证 Root 后的服务连接错误单独报告。
 

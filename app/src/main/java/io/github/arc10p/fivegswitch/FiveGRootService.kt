@@ -14,6 +14,10 @@ import java.lang.reflect.Method
 
 class FiveGRootService : RootService() {
     private var hiddenApiStatus = "电话隐藏接口豁免尚未设置"
+    private val writer by lazy {
+        AllowedNetworkTypesWriter(HiddenApiBypass.getDeclaredMethods(ITelephony::class.java)
+            .filterIsInstance<Method>())
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -45,8 +49,11 @@ class FiveGRootService : RootService() {
         override fun setUserMask(subId: Int, mask: Long): Boolean =
             call("setAllowedNetworkTypesForReason(subId=$subId, reason=USER, mask=$mask)") {
                 require(SubscriptionManager.isValidSubscriptionId(subId) && mask >= 0L) { "无效写入参数" }
-                phone().setAllowedNetworkTypesForReason(subId,
-                    TelephonyManager.ALLOWED_NETWORK_TYPES_REASON_USER, mask)
+                val receiver = phone()
+                // 四参数接口传入本应用自己的包身份，不冒用系统设置或其他应用。
+                val identity = packageName
+                Log.i("5GSwitch", "${writer.signature} packageIdentity=$identity subId=$subId mask=$mask")
+                writer.write(receiver, subId, TelephonyManager.ALLOWED_NETWORK_TYPES_REASON_USER, mask, identity)
             }
     }
 
