@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class FiveGBackendTest {
     private class Device : TelephonyAccess {
         var uid = 0
+        var uidFailure: String? = null
         var compatible = true
         var mask = (1L shl 12) or (1L shl 15) or (1L shl 2)
         val calls = mutableListOf<String>()
@@ -21,7 +22,10 @@ class FiveGBackendTest {
         var checkFailure: String? = null
         var afterSet: () -> Unit = {}
 
-        override fun getRootUid() = uid
+        override fun getRootUid(): Int {
+            uidFailure?.let { error(it) }
+            return uid
+        }
         override fun checkCompatibility(subId: Int): Boolean {
             calls += "check:$subId"
             checkFailure?.let { error(it) }
@@ -155,6 +159,13 @@ class FiveGBackendTest {
         val result = backend(Device().apply { uid = 2000 }).run()
         assertEquals(FiveGController.Error.ROOT_UNAVAILABLE, result.error)
         assertFalse(result.state.rootAvailable!!)
+    }
+
+    @Test fun `获取 UID 时 Binder 死亡不能断言未授权`() {
+        val result = backend(Device().apply { uidFailure = "DeadObjectException" }).run()
+        assertEquals(FiveGController.Error.ROOT_UNAVAILABLE, result.error)
+        assertNull(result.state.rootAvailable)
+        assertTrue(result.message.contains("DeadObjectException"))
     }
 
     @Test fun `区分电话 Binder 故障与接口不兼容`() {

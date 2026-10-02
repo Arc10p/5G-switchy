@@ -28,7 +28,7 @@ object FiveGController {
     }
 
     enum class Error {
-        ROOT_UNAVAILABLE, PHONE_UNAVAILABLE, DEFAULT_SIM_UNAVAILABLE,
+        ROOT_UNAVAILABLE, SERVICE_UNAVAILABLE, PHONE_UNAVAILABLE, DEFAULT_SIM_UNAVAILABLE,
         READ_FAILED, UPDATE_FAILED, UNSUPPORTED_DEVICE,
     }
 
@@ -40,13 +40,28 @@ object FiveGController {
     private val main = Handler(Looper.getMainLooper())
     private val modifying = AtomicBoolean(false)
     private val connections = ConnectionScope<RootBinding>({ it.canReuse }, { it.releaseAndAwait() })
+    private val rootShells = RootShellSession<Shell>({ it.isAlive }, { shell ->
+        val stdout = ArrayList<String>()
+        val stderr = ArrayList<String>()
+        val verification = shell.newJob().add("/system/bin/id -u").to(stdout, stderr).enqueue()
+        // Builder 的超时只覆盖初始化；单独限制 UID 验证，超时后会话由外层关闭。
+        val result = try {
+            verification.get(10, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            verification.cancel(true)
+            throw IllegalStateException("su UID 验证未能在 10 秒内完成或执行失败", e)
+        }
+        val uid = stdout.singleOrNull()?.trim()?.toIntOrNull()
+        check(result.isSuccess && uid != null) {
+            "su UID 验证失败：exitCode=${result.code} stdout=${stdout.joinToString(" ").take(512)} " +
+                "stderr=${stderr.joinToString(" ").take(512)}"
+        }
+        Log.i("5GSwitch", "su 实际 UID=$uid libsuStatus=${shell.status}")
+        uid
+    }, { it.close() })
     @Volatile private var pendingLaunch: Shell.Task? = null
     @Volatile var lastOperation: Result? = null
         private set
-
-    init {
-        Shell.setDefaultBuilder(Shell.Builder.create().setTimeout(60))
-    }
 
     fun retainClient() = connections.retainClient()
 
@@ -92,9 +107,11 @@ object FiveGController {
     private fun execute(context: Context, enabled: Boolean?, modification: Boolean, callback: (Result) -> Unit) {
         connections.beginOperation()
         executor.execute {
+            var binding: RootBinding? = null
             val result = try {
-                val binding = connections.connection { RootBinding(context) }
-                val service = binding.connect()
+                val currentBinding = connections.connection { RootBinding(context) }
+                binding = currentBinding
+                val service = currentBinding.connect()
                 Log.i("5GSwitch", "RootService pid=${service.rootPid}")
                 val access = object : TelephonyAccess {
                     override fun getRootUid() = service.rootUid
@@ -105,9 +122,17 @@ object FiveGController {
                 FiveGBackend(access, { getDefaultDataSim() }, { Log.i("5GSwitch", it) })
                     .run(enabled, toggle = modification && enabled == null)
             } catch (e: Exception) {
-                val message = "RootService 无法连接，请检查 Root 授权：${e.javaClass.simpleName}: ${e.message}"
+                val root = binding?.rootAvailable
+                val causes = generateSequence<Throwable>(e) { it.cause }.take(6)
+                    .joinToString(" ← ") { "${it.javaClass.simpleName}: ${it.message}" }
+                val message = when (root) {
+                    true -> "已验证 Root UID=0，但 RootService 连接失败：$causes"
+                    false -> "su 会话未取得 UID 0：$causes"
+                    null -> "RootService 连接失败，Root 状态尚未确认：$causes"
+                }
                 Log.e("5GSwitch", message, e)
-                Result(State(rootAvailable = false), message, Error.ROOT_UNAVAILABLE)
+                Result(State(rootAvailable = root), message,
+                    if (root == false) Error.ROOT_UNAVAILABLE else Error.SERVICE_UNAVAILABLE)
             } finally {
                 connections.endOperation()
                 closeIfIdle()
@@ -118,7 +143,7 @@ object FiveGController {
         }
     }
 
-    private class RootBinding(context: Context) : ServiceConnection {
+    private class RootBinding(private val context: Context) : ServiceConnection {
         private val intent = Intent(context, FiveGRootService::class.java)
         private val connected = CountDownLatch(1)
         private val prepared = CountDownLatch(1)
@@ -129,6 +154,8 @@ object FiveGController {
         @Volatile private var requested = false
         @Volatile private var service: IFiveGService? = null
         @Volatile private var failure: String? = null
+        var rootAvailable: Boolean? = null
+            private set
 
         val isAlive: Boolean get() = !released.get() && remoteBinder?.isBinderAlive == true && service != null
         val canReuse: Boolean get() = !released.get() && failure == null &&
@@ -136,11 +163,14 @@ object FiveGController {
 
         fun connect(): IFiveGService {
             service?.takeIf { isAlive }?.let { return it }
-            // 先授权，再创建 libsu 绑定任务，拒绝授权不会留下启动中标记。
-            val shell = Shell.getShell()
-            if (!shell.isRoot) {
-                shell.close()
-                error("未取得 Root 权限，请在 Root 管理器中授权后重试")
+            // 显式创建 su，不让默认 builder 吞掉启动错误后退回普通 sh。
+            // 使用独立会话，避免主 shell 初始化异常后留下无法重试的缓存状态。
+            val shell = try {
+                rootShells.acquire {
+                    Shell.Builder.create().setContext(context).setTimeout(60).build("su")
+                }
+            } finally {
+                rootAvailable = rootShells.rootAvailable
             }
             // libsu 绑定必须在主线程；只有等待与电话 Binder 调用在工作线程。
             if (!requested) {
@@ -267,7 +297,6 @@ internal class FiveGBackend(
             FiveGController.Result(state, if (enabled != null || toggle)
                 "操作成功，已读回完整 USER 位掩码。" else "已读取系统 USER 网络配置。")
         } catch (e: Failure) {
-            if (e.kind == FiveGController.Error.ROOT_UNAVAILABLE) state = state.copy(rootAvailable = false)
             log("error=${e.kind}\n${e.message}")
             FiveGController.Result(state, e.message, e.kind)
         } catch (e: Exception) {
