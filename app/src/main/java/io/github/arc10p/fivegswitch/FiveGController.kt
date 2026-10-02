@@ -121,6 +121,7 @@ object FiveGController {
     private class RootBinding(context: Context) : ServiceConnection {
         private val intent = Intent(context, FiveGRootService::class.java)
         private val connected = CountDownLatch(1)
+        private val prepared = CountDownLatch(1)
         private val released = AtomicBoolean(false)
         private val unbound = CountDownLatch(1)
         private val died = CountDownLatch(1)
@@ -143,13 +144,13 @@ object FiveGController {
             }
             // libsu 绑定必须在主线程；只有等待与电话 Binder 调用在工作线程。
             if (!requested) {
-                val prepared = CountDownLatch(1)
                 main.post {
-                    if (!released.get()) try {
+                    if (!released.get() && !requested) try {
+                        // 主线程开始提交时即标记，准备超时后的重试不能再次注册同一连接。
+                        requested = true
                         RootService.bindOrTask(intent, { task -> main.post(task) }, this)?.let {
                             pendingLaunch = it
                         }
-                        requested = true
                     } catch (e: Exception) {
                         failure = "${e.javaClass.simpleName}: ${e.message}"
                         connected.countDown()
@@ -157,8 +158,8 @@ object FiveGController {
                         prepared.countDown()
                     }
                 }
-                check(prepared.await(60, TimeUnit.SECONDS)) { "主线程未能准备 RootService 绑定" }
             }
+            check(prepared.await(60, TimeUnit.SECONDS)) { "主线程未能准备 RootService 绑定" }
             if (failure != null) error(failure!!)
             // 启动无响应时保留可重执行的任务，下一次重试仍能发起 root 进程。
             if (connected.count > 0) pendingLaunch?.let { shell.execTask(it) }
