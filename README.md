@@ -17,13 +17,14 @@
 ```sh
 cmd phone get-allowed-network-types-for-users -s SLOT_ID
 cmd phone set-allowed-network-types-for-users -s SLOT_ID BINARY_MASK
+content query --uri content://telephony/siminfo --projection _id:sim_id:allowed_network_types_for_reasons --where '_id=SUB_ID'
 ```
 
-`SLOT_ID` 由当前默认数据 subscriptionId 动态映射，不能把 subId 直接传给 `-s`。读取 AOSP 网络名称并还原位掩码，写入二进制字符串，仅增加或移除 `NETWORK_TYPE_BITMASK_NR`。AOSP 输出的 `LTE_CA` 是 LTE 位的别名；不会额外添加 LTE_CA 位。操作串行、防止重复点击，写入后重新读取并校验，默认卡变化时中止或报告错误。
+`SLOT_ID` 由当前默认数据 subscriptionId 动态映射，不能把 subId 直接传给 `-s`。`cmd phone` 的名称输出有损（包括 LTE_CA 别名及隐藏位），因此额外只读查询该订阅的原始 USER 位掩码，并交叉校验订阅 ID、槽位和可见网络配置。基于完整 mask 仅增加或移除 `NETWORK_TYPE_BITMASK_NR`，以二进制字符串写入；完整保留独立 LTE_CA 位及其他未知位。操作串行、防止重复点击，写入后重新读取并校验，默认卡变化时中止或报告错误。
 
 状态表示 **USER 配置是否允许 NR**，不保证当前已连接 5G。其他 reason、运营商、调制解调器和系统节电策略仍会限制 5G。厂商控制中心/设置页可能不会同步显示本应用的修改。
 
-未连接 ColorOS 17 真机，不能宣称已验证兼容。只接受已核对的 AOSP help 与输出格式；`UNKNOWN`、未知名称或参数变化会拒绝写入。AOSP 名称接口不会公开未知厂商位和独立 LTE_CA 位，因此本方案保留接口可表达的网络位，无法保证隐藏位的完整性；有此需求的设备需取得实际诊断后改用返回原始 mask 的接口。暂不加入 RootService / Binder fallback。
+未连接 ColorOS 17 真机，不能宣称已验证兼容。只接受已核对的 AOSP help、名称输出和订阅字段格式；未知名称、参数变化或读数不一致会拒绝写入。`UNKNOWN` 仅在原始 mask 证明没有可见网络位时接受。若厂商禁止查询订阅字段、改变字段名称，或订阅尚未持久化 USER reason，也会安全中止，不能仅凭名称重建 mask。需取得实际诊断后决定是否替换读取接口。暂不加入 RootService / Binder fallback。
 
 ## 真机验收
 

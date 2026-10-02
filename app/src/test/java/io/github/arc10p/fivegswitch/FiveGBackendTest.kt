@@ -21,6 +21,7 @@ class FiveGBackendTest {
         var setOutput = "${PhoneCommands.SET} completed"
         var setExit = 0
         var applyWrite = true
+        var getOutput: String? = null
 
         fun exec(command: String): RootShell.Result {
             commands += command
@@ -29,11 +30,17 @@ class FiveGBackendTest {
                 command.startsWith("cmd phone ${PhoneCommands.GET}") -> {
                     val output = "UMTS|LTE|GSM|LTE_CA" +
                         if (mask and PhoneCommands.NR != 0L) "|NR" else ""
-                    RootShell.Result(command, 0, output)
+                    RootShell.Result(command, 0, getOutput ?: output)
                 }
                 command.startsWith("cmd phone ${PhoneCommands.SET}") -> {
                     if (applyWrite) mask = command.substringAfterLast(' ').toLong(2)
                     RootShell.Result(command, setExit, setOutput, if (setExit == 0) "" else "Permission denied")
+                }
+                command.startsWith("content query") -> {
+                    val subId = Regex("_id=([0-9]+)").find(command)!!.groupValues[1].toInt()
+                    val slot = if (subId == 83) 1 else 0
+                    RootShell.Result(command, 0, "Row: 0 _id=$subId, sim_id=$slot, " +
+                        "allowed_network_types_for_reasons=user=$mask,carrier=1048575")
                 }
                 else -> error("意外命令：$command")
             }
@@ -68,6 +75,35 @@ class FiveGBackendTest {
             assertEquals(mask and PhoneCommands.NR.inv(), PhoneCommands.with5G(mask, false))
             assertTrue(on and PhoneCommands.NR != 0L)
         }
+    }
+
+    @Test fun `整个控制路径保留名称接口隐藏的原始位`() {
+        val device = Device()
+        device.mask = device.mask or (1L shl 18) or (1L shl 40)
+        val original = device.mask
+        val controller = backend(device)
+        assertTrue(controller.run(toggle = true).success)
+        assertEquals(original or PhoneCommands.NR, device.mask)
+        assertTrue(controller.run(toggle = true).success)
+        assertEquals(original, device.mask)
+    }
+
+    @Test fun `无法完整读取 USER 或订阅记录不匹配时拒绝解码`() {
+        val sim = FiveGController.DataSim(83, 1)
+        listOf("No result found.", "Row: 0 _id=27, sim_id=1, allowed_network_types_for_reasons=user=1",
+            "Row: 0 _id=83, sim_id=0, allowed_network_types_for_reasons=user=1",
+            "Row: 0 _id=83, sim_id=1, allowed_network_types_for_reasons=carrier=1",
+            "Row: 0 _id=83, sim_id=1, allowed_network_types_for_reasons=user=-1",
+            "Row: 0 _id=83, sim_id=1, allowed_network_types_for_reasons=user=1,user=2").forEach {
+            assertThrows(IllegalArgumentException::class.java) { PhoneCommands.parseRawUser(it, sim) }
+        }
+    }
+
+    @Test fun `UNKNOWN 只有完整 USER 值无可见位时才能安全读取`() {
+        val device = Device().apply { mask = 1L shl 40; getOutput = "UNKNOWN" }
+        assertTrue(backend(device).run().success)
+        device.mask = 1L shl 12
+        assertEquals(FiveGController.Error.READ_FAILED, backend(device).run().error)
     }
 
     @Test fun `使用动态槽位并以二进制写入后读回`() {
@@ -121,7 +157,7 @@ class FiveGBackendTest {
         val device = Device()
         var calls = 0
         val result = backend(device) {
-            if (++calls == 1) FiveGController.DataSim(83, 1) else FiveGController.DataSim(27, 0)
+            if (++calls <= 2) FiveGController.DataSim(83, 1) else FiveGController.DataSim(27, 0)
         }.run(toggle = true)
         assertEquals(FiveGController.Error.DEFAULT_SIM_UNAVAILABLE, result.error)
         assertEquals(FiveGController.DataSim(27, 0), result.state.sim)
@@ -133,7 +169,7 @@ class FiveGBackendTest {
         val device = Device()
         var calls = 0
         val result = backend(device) {
-            if (++calls <= 2) FiveGController.DataSim(83, 1) else FiveGController.DataSim(27, 0)
+            if (++calls <= 3) FiveGController.DataSim(83, 1) else FiveGController.DataSim(27, 0)
         }.run(toggle = true)
         assertEquals(FiveGController.Error.DEFAULT_SIM_UNAVAILABLE, result.error)
         assertEquals(FiveGController.DataSim(27, 0), result.state.sim)
@@ -146,7 +182,7 @@ class FiveGBackendTest {
         assertTrue(controller.run(toggle = true).success)
         sim = FiveGController.DataSim(27, 0)
         assertTrue(controller.run(toggle = true).success)
-        assertEquals(PhoneCommands.read(0), device.commands.last())
+        assertTrue(device.commands.takeLast(2).contains(PhoneCommands.read(0)))
     }
 
     @Test fun `拒绝不能无歧义解码的输出`() {

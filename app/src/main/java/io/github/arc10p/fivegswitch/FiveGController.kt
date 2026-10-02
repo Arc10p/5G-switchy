@@ -142,10 +142,27 @@ internal class FiveGBackend(
         state = state.copy(sim = currentSim, mask = null)
         val result = exec(PhoneCommands.read(currentSim.slotIndex))
         checkExit(result, "读取网络类型失败")
+        // 名称输出有损；从同一订阅的数据库字段获取完整值，不猜测未显示的位。
+        val raw = exec(PhoneCommands.readRawUser(currentSim))
+        checkExit(raw, "读取原始 USER 位掩码失败")
         val mask = try {
-            PhoneCommands.parseMask(result.stdout)
+            PhoneCommands.parseRawUser(raw.stdout, currentSim)
+        } catch (e: IllegalArgumentException) {
+            fail(FiveGController.Error.READ_FAILED, "无法安全读取完整 USER 位掩码：${e.message}", raw)
+        }
+        val visible = try {
+            // 完整值证明没有可见位时，UNKNOWN 才能安全视为零。
+            if (result.stdout.trim() == "UNKNOWN" && PhoneCommands.visibleMask(mask) == 0L) 0L
+            else PhoneCommands.parseMask(result.stdout)
         } catch (e: IllegalArgumentException) {
             fail(FiveGController.Error.READ_FAILED, "无法读取网络类型：${e.message}", result)
+        }
+        if (PhoneCommands.visibleMask(mask) != visible) fail(FiveGController.Error.READ_FAILED,
+            "订阅 USER 配置与 cmd phone 结果不一致，请重试：rawMask=$mask visibleMask=$visible。", raw)
+        if (sim() != currentSim) {
+            state = state.copy(sim = null, mask = null)
+            throw Failure(FiveGController.Error.DEFAULT_SIM_UNAVAILABLE,
+                "读取期间默认数据 SIM 已改变，请重试。")
         }
         state = state.copy(mask = mask)
         log("subId=${currentSim.subId} slotIndex=${currentSim.slotIndex} currentMask=$mask")
