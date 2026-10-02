@@ -16,7 +16,6 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 
 object FiveGController {
     data class DataSim(val subId: Int, val slotIndex: Int)
@@ -42,7 +41,11 @@ object FiveGController {
         LinkedBlockingQueue(), { Thread(it, "5G-controller") }).apply { allowCoreThreadTimeOut(true) }
     private val main = Handler(Looper.getMainLooper())
     private val modifying = AtomicBoolean(false)
-    private val cleanupGeneration = AtomicLong()
+    private val idleRelease = IdleReleaseScheduler(
+        { ignoreClients -> closeIfIdle(ignoreClients) },
+        { task -> main.postDelayed({ task() }, 1000) },
+        { task -> executor.execute { task() } },
+    )
     private var lastRootMemory: IntArray? = null
     private var lastIdleMemory: IntArray? = null
     private val connections = ConnectionScope<RootBinding>({ it.canReuse }, { it.releaseAndAwait() })
@@ -73,8 +76,8 @@ object FiveGController {
 
     fun releaseClient() {
         connections.releaseClient()
-        cleanupGeneration.incrementAndGet()
-        executor.execute { closeIfIdle() }
+        idleRelease.invalidate()
+        executor.execute { idleRelease.request() }
     }
 
     private fun closeIfIdle(ignoreClients: Boolean = false) {
@@ -88,15 +91,6 @@ object FiveGController {
         } catch (e: Exception) {
             Log.w("5GSwitch", "等待旧 RootService 退出：${e.message}")
         }
-    }
-
-    private fun scheduleIdleRelease() {
-        val generation = cleanupGeneration.incrementAndGet()
-        main.postDelayed({
-            executor.execute {
-                if (generation == cleanupGeneration.get()) closeIfIdle(ignoreClients = true)
-            }
-        }, 1000)
     }
 
     fun memoryReport(callback: (String) -> Unit) {
@@ -146,7 +140,7 @@ object FiveGController {
     }
 
     private fun execute(context: Context, enabled: Boolean?, modification: Boolean, callback: (Result) -> Unit) {
-        cleanupGeneration.incrementAndGet()
+        idleRelease.invalidate()
         connections.beginOperation()
         executor.execute {
             var binding: RootBinding? = null
@@ -179,8 +173,7 @@ object FiveGController {
                     if (root == false) Error.ROOT_UNAVAILABLE else Error.SERVICE_UNAVAILABLE)
             } finally {
                 connections.endOperation()
-                closeIfIdle()
-                scheduleIdleRelease()
+                idleRelease.request()
                 if (modification) modifying.set(false)
             }
             if (modification) lastOperation = result
@@ -268,7 +261,7 @@ object FiveGController {
             pendingLaunch = null
             connected.countDown()
             // 若连接在界面退出后迟到，空闲清理会负责解绑并确认进程死亡。
-            executor.execute { closeIfIdle(); scheduleIdleRelease() }
+            executor.execute { idleRelease.request() }
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
