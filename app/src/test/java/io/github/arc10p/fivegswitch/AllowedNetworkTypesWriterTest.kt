@@ -35,7 +35,7 @@ class AllowedNetworkTypesWriterTest {
         val writer = AllowedNetworkTypesWriter(LegacyPhone::class.java.methods.toList())
         val mask = 392191L or (1L shl 40)
         assertTrue(writer.write(phone, 1, 0, mask, "测试包身份"))
-        assertEquals(listOf(1, 0, mask), phone.received)
+        assertEquals(listOf<Any>(1, 0, mask), phone.received)
     }
 
     @Test fun `设备四参数签名收到相同 Long 掩码及本应用包身份`() {
