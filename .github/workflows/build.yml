@@ -33,8 +33,8 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew --no-daemon assembleDebug
 
-      - name: Run unit tests and lint
-        run: ./gradlew --no-daemon testDebugUnitTest lintDebug
+      - name: Run unit tests, lint and release shrinker
+        run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleRelease
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

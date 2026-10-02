@@ -44,7 +44,7 @@ class MainActivity : Activity() {
     private fun refresh() {
         val token = ++request
         loading()
-        FiveGController.refresh { result ->
+        FiveGController.refresh(this) { result ->
             if (!isDestroyed && token == request) render(result, rememberOperation = true)
         }
     }
@@ -52,12 +52,12 @@ class MainActivity : Activity() {
     private fun change() {
         val token = ++request
         loading()
-        val accepted = FiveGController.toggle { result ->
+        val accepted = FiveGController.toggle(this) { result ->
             if (!isDestroyed && token == request) render(result)
         }
         if (!accepted) {
             details.setText(R.string.busy)
-            FiveGController.refresh { result ->
+            FiveGController.refresh(this) { result ->
                 if (!isDestroyed && token == request) render(result, rememberOperation = true)
             }
         }

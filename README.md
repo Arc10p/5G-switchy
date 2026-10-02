@@ -1,31 +1,25 @@
 # 5G Switch
 
-极简原生 Kotlin 应用：控制当前默认数据 SIM 的 USER 5G 配置，并提供 **5G** 快捷设置磁贴。需要 Root、Android 12+；目标是 ColorOS 17，尚待真机验证。不依赖 LSPosed、AndroidX、Compose 或常驻服务。
+极简原生 Kotlin 应用：切换当前默认数据 SIM 的 USER 5G 配置，提供 **5G** 快捷设置磁贴。需要 Root、Android 12+；目标为 ColorOS 17，尚待真机验证。
 
-## 安装
+## 安装与构建
 
-在 [Actions](https://github.com/Arc10p/5G-switchy/actions) 打开对应分支最新成功的 **Build APK**，下载 **5GSwitch-debug** Artifact，解压并安装 `app-debug.apk`。首次打开应用时在 Root 管理器中授权。展开控制中心 → 编辑磁贴 → 添加 **5G**。锁屏点击需先解锁。
+在 [Actions](https://github.com/Arc10p/5G-switchy/actions) 打开对应分支最新成功的 **Build APK**，下载 **5GSwitch-debug** Artifact，解压安装 `app-debug.apk`。首次打开时在 Root 管理器中授权。控制中心 → 编辑磁贴 → 添加 **5G**；锁屏切换需先解锁。
 
-用户电脑无需 Android Studio、Android SDK 或 Gradle。推送代码、PR 均自动构建；工作流合入默认分支后也可手动触发。CI 明确安装 JDK 17、SDK 35 / Build Tools 34.0.0，并使用随项目提交的 Gradle 8.9 Wrapper。
+用户电脑无需 Android Studio、Android SDK 或 Gradle。推送、PR 自动构建；工作流合入默认分支后可手动触发。CI 使用 JDK 17、SDK 35、Build Tools 34.0.0 和完整 Gradle 8.9 Wrapper，执行 `./gradlew assembleDebug`、18 项单元测试、lint 及 Release 压缩校验。
 
-标准构建：`./gradlew assembleDebug`。产物：`app/build/outputs/apk/debug/app-debug.apk`。开发机自行构建需 JDK 17 和 SDK，但不需要 `local.properties`，可通过 `ANDROID_HOME` 指定 SDK。CI 同时执行 `testDebugUnitTest lintDebug`。Release 开启代码与资源压缩，第一版不配置签名。
+Debug 产物：`app/build/outputs/apk/debug/app-debug.apk`。Release 开启代码/资源压缩，未配置签名。开发机自行构建需 JDK 17 和 SDK，可用 `ANDROID_HOME`，不依赖 `local.properties`。
 
-## 控制方式与边界
+## 5G 控制
 
-通过 `su -c` 执行 `id -u`、`cmd phone help`，确认设备支持 AOSP 参数格式后执行：
+参考 LuckyTool 的最小 5G 链：**UI / TileService → 应用 AIDL → libsu RootService → ServiceManager("phone") → 系统 ITelephony**。仅依赖 libsu core/service 6.0.0；两个 hidden API 类型通过 `compileOnly` 声明，不打入 APK。不使用 shell 电话命令、LSPosed、Xposed、Compose、数据库或常驻后台服务。每次操作按需绑定 RootService，结束后解绑。
 
-```sh
-cmd phone get-allowed-network-types-for-users -s SLOT_ID
-cmd phone set-allowed-network-types-for-users -s SLOT_ID BINARY_MASK
-content query --uri content://telephony/siminfo --projection _id:sim_id:allowed_network_types_for_reasons --where '_id=SUB_ID'
-```
+动态读取默认数据 subscriptionId，调用 `getAllowedNetworkTypesForReason(subId, ALLOWED_NETWORK_TYPES_REASON_USER)` 取得完整 `Long`。开启只 `mask or NETWORK_TYPE_BITMASK_NR`，关闭只 `mask and NETWORK_TYPE_BITMASK_NR.inv()`；通过 `setAllowedNetworkTypesForReason()` 写回，保留所有非 NR 位，包括 LTE_CA 及未知高位。
 
-`SLOT_ID` 由当前默认数据 subscriptionId 动态映射，不能把 subId 直接传给 `-s`。`cmd phone` 的名称输出有损（包括 LTE_CA 别名及隐藏位），因此额外只读查询该订阅的原始 USER 位掩码，并交叉校验订阅 ID、槽位和可见网络配置。基于完整 mask 仅增加或移除 `NETWORK_TYPE_BITMASK_NR`，以二进制字符串写入；完整保留独立 LTE_CA 位及其他未知位。操作串行、防止重复点击，写入后重新读取并校验，默认卡变化时中止或报告错误。
+操作在单线程执行，界面和磁贴共享防重入门闩。检查 setter 的 boolean 与完整读回值，默认卡变化时中止或报告错误。兼容检查只读取，不写回原值。失败显示 Binder 方法、参数及异常，日志标签 **5GSwitch**；磁贴失败显示不可用，可打开应用查看诊断。
 
-状态表示 **USER 配置是否允许 NR**，不保证当前已连接 5G。其他 reason、运营商、调制解调器和系统节电策略仍会限制 5G。厂商控制中心/设置页可能不会同步显示本应用的修改。
+## 已知问题与真机验收
 
-未连接 ColorOS 17 真机，不能宣称已验证兼容。只接受已核对的 AOSP help、名称输出和订阅字段格式；未知名称、参数变化或读数不一致会拒绝写入。`UNKNOWN` 仅在原始 mask 证明没有可见网络位时接受。若厂商禁止查询订阅字段、改变字段名称，或订阅尚未持久化 USER reason，也会安全中止，不能仅凭名称重建 mask。需取得实际诊断后决定是否替换读取接口。暂不加入 RootService / Binder fallback。
+状态表示 **USER 配置允许 NR**，实际 5G 连接仍取决于运营商、信号、调制解调器和其他 reason。ColorOS 设置页可能不同步显示本应用修改；Root 授权或服务启动超过 60 秒会超时。普通应用进程不调用 hidden API，平台 Binder 的运行兼容仍需 ColorOS 17 真机确认。
 
-## 真机验收
-
-检查 Root 授权/拒绝、`cmd phone help` 格式、开关前后非 NR 位、双卡默认数据切换、无 SIM、连续点击、磁贴再次展开、系统其他设置更改后的刷新。界面显示可复制的命令、exitCode、stdout/stderr；日志标签为 `5GSwitch`。若不兼容，请保留完整诊断与系统帮助输出，再决定是否需要最小 Binder fallback。
+请验证 Root 授权/拒绝、完整 mask 开关前后仅 NR 位变化、双卡默认数据切换、无 SIM、连续点击、锁屏切换、磁贴重新展开、服务断开后重试，以及安装 Release 后 RootService 能否启动。未移植 LuckyTool 的其他 Hook 功能。

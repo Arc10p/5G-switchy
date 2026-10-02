@@ -14,7 +14,7 @@ class FiveGTileService : TileService() {
         listening = true
         val token = ++generation
         if (busy) return
-        FiveGController.refresh { result ->
+        FiveGController.refresh(this) { result ->
             if (listening && token == generation && !busy) render(result)
         }
     }
@@ -40,14 +40,14 @@ class FiveGTileService : TileService() {
             subtitle = getString(R.string.working)
             updateTile()
         }
-        val accepted = FiveGController.toggle { result ->
+        val accepted = FiveGController.toggle(this) { result ->
             busy = false
             if (listening) render(result)
             if (!result.success) Toast.makeText(this,
                 R.string.tile_error, Toast.LENGTH_LONG).show()
         }
         if (!accepted) {
-            FiveGController.refresh { result ->
+            FiveGController.refresh(this) { result ->
                 busy = false
                 if (listening) render(result)
             }

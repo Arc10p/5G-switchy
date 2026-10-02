@@ -31,8 +31,14 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    buildFeatures {
+        aidl = true
+    }
 }
 
 dependencies {
+    compileOnly(project(":hidden-api-stub"))
+    implementation("com.github.topjohnwu.libsu:core:6.0.0")
+    implementation("com.github.topjohnwu.libsu:service:6.0.0")
     testImplementation("junit:junit:4.13.2")
 }
