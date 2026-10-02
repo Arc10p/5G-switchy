@@ -12,11 +12,11 @@ Debug 产物：`app/build/outputs/apk/debug/app-debug.apk`。Release 开启代�
 
 ## 5G 控制
 
-参考 LuckyTool 的最小 5G 链：**UI / TileService → 应用 AIDL → libsu RootService → ServiceManager("phone") → 系统 ITelephony**。仅依赖 libsu core/service 6.0.0；两个 hidden API 类型通过 `compileOnly` 声明，不打入 APK。不使用 shell 电话命令、LSPosed、Xposed、Compose、数据库或常驻后台服务。界面或磁贴可见期间复用同一 RootService 连接，最后一个客户端退出且待执行操作全部结束后解绑；确认旧 root 进程退出后才建立新连接。
+参考 LuckyTool 的最小 5G 链：**UI / TileService → 应用 AIDL → libsu RootService → ServiceManager("phone") → 系统 ITelephony**。依赖 libsu core/service 6.0.0，以及 LuckyTool 同版本的独立 HiddenApiBypass 6.1 库；不需要安装 LSPosed 或 Xposed 框架。两个 hidden API 类型通过 `compileOnly` 声明，不打入 APK。不使用 shell 电话命令、Compose、数据库或常驻后台服务。界面或磁贴可见期间复用同一 RootService 连接，最后一个客户端退出且待执行操作全部结束后解绑；确认旧 root 进程退出后才建立新连接。
 
 动态读取默认数据 subscriptionId，调用 `getAllowedNetworkTypesForReason(subId, ALLOWED_NETWORK_TYPES_REASON_USER)` 取得完整 `Long`。开启只 `mask or NETWORK_TYPE_BITMASK_NR`，关闭只 `mask and NETWORK_TYPE_BITMASK_NR.inv()`；通过 `setAllowedNetworkTypesForReason()` 写回，保留所有非 NR 位，包括 LTE_CA 及未知高位。
 
-操作在单线程执行，界面和磁贴共享防重入门闩。检查 setter 的 boolean 与完整读回值，默认卡变化时中止或报告错误。兼容检查核对系统真实 setter 签名并读取，不写回原值。链接错误转换为可见诊断，日志记录 root PID 与断连事件，标签 **5GSwitch**。写入时 Binder 死亡不会自动重放 toggle，需重新检测实际状态；磁贴失败显示不可用，可打开应用查看诊断。
+操作在单线程执行，界面和磁贴共享防重入门闩。RootService 启动时只开放 ITelephony 类的隐藏接口访问；getter/setter 按 LuckyTool 直接调用，不以普通反射查找 setter 作为兼容门槛。刷新仅读取，实际切换检查 setter 的 boolean 与完整读回值，默认卡变化时中止或报告错误。链接错误转换为可见诊断；真实调用找不到方法时显示系统接口签名及豁免状态。日志记录 root PID 与断连事件，标签 **5GSwitch**。写入时 Binder 死亡不会自动重放 toggle，需重新检测实际状态；磁贴失败显示不可用，可打开应用查看诊断。
 
 启动使用 libsu 独立 `su` 会话并通过 `/system/bin/id -u` 验证 UID 0，不自动退回普通 `sh`。启动失败保留异常原因，下一次重试重新创建；只有实际 UID 非 0 才显示 Root 不可用。已验证 Root 后的服务连接错误单独报告。
 

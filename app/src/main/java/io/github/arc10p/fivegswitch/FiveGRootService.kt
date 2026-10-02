@@ -9,19 +9,31 @@ import android.telephony.TelephonyManager
 import android.util.Log
 import com.android.internal.telephony.ITelephony
 import com.topjohnwu.superuser.ipc.RootService
+import org.lsposed.hiddenapibypass.HiddenApiBypass
+import java.lang.reflect.Method
 
 class FiveGRootService : RootService() {
+    private var hiddenApiStatus = "电话隐藏接口豁免尚未设置"
+
+    override fun onCreate() {
+        super.onCreate()
+        // 只在独立 root 进程开放电话接口，普通应用进程不访问隐藏 API。
+        hiddenApiStatus = try {
+            if (HiddenApiBypass.addHiddenApiExemptions("Lcom/android/internal/telephony/ITelephony"))
+                "电话隐藏接口豁免已设置" else "电话隐藏接口豁免设置返回 false"
+        } catch (e: Throwable) {
+            if (e is VirtualMachineError || e is ThreadDeath) throw e
+            "电话隐藏接口豁免设置失败：${e.javaClass.simpleName}: ${e.message}"
+        }
+        Log.i("5GSwitch", hiddenApiStatus)
+    }
+
     private val controller = object : IFiveGService.Stub() {
         override fun getRootUid(): Int = Process.myUid()
         override fun getRootPid(): Int = Process.myPid()
 
         override fun checkCompatibility(subId: Int): Boolean = call("checkCompatibility(subId=$subId)") {
-            // 在 root 进程核对系统真实方法，不能只验证 getter 就认定 setter 可链接。
-            val setter = ITelephony::class.java.getMethod("setAllowedNetworkTypesForReason",
-                Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, Long::class.javaPrimitiveType)
-            check(setter.returnType == Boolean::class.javaPrimitiveType) {
-                "ITelephony setter 返回类型不兼容：${setter.returnType.name}"
-            }
+            // 与 LuckyTool 使用相同的直接调用链；刷新只读取，写入结果在实际切换时检查。
             getUserMask(subId) >= 0L
         }
 
@@ -48,6 +60,26 @@ class FiveGRootService : RootService() {
     }
 
     private inline fun <T> call(operation: String, block: () -> T): T =
-        BinderCalls.call(operation, { Log.e("5GSwitch", operation, it) }, block)
+        BinderCalls.call(operation, { Log.e("5GSwitch", operation, it) }) {
+            try {
+                block()
+            } catch (e: NoSuchMethodError) {
+                // 只有真实调用无法链接时才列出接口，不能把反射预检作为开关门槛。
+                throw IllegalStateException("${e.javaClass.simpleName}: ${e.message}\n" +
+                    "$hiddenApiStatus\n系统电话接口：${networkTypeSignatures()}", e)
+            }
+        }
             .also { Log.i("5GSwitch", "$operation → $it") }
+
+    private fun networkTypeSignatures(): String = try {
+        HiddenApiBypass.getDeclaredMethods(ITelephony::class.java).filterIsInstance<Method>()
+            .filter { it.name == "getAllowedNetworkTypesForReason" || it.name == "setAllowedNetworkTypesForReason" }
+            .joinToString("; ") { method ->
+                "${method.returnType.simpleName} ${method.name}(" +
+                    method.parameterTypes.joinToString(",") { it.simpleName } + ")"
+            }.ifEmpty { "未枚举到对应方法" }
+    } catch (e: Throwable) {
+        if (e is VirtualMachineError || e is ThreadDeath) throw e
+        "枚举失败：${e.javaClass.simpleName}: ${e.message}"
+    }
 }
