@@ -33,12 +33,15 @@ internal class ConnectionScope<T>(
         return create().also { cached = it }
     }
 
-    fun closeIfIdle() {
-        val idle = synchronized(this) { clients == 0 && operations == 0 }
+    val currentConnection: T? get() = cached
+
+    fun closeIfIdle(ignoreClients: Boolean = false): Boolean {
+        val idle = synchronized(this) { operations == 0 && (ignoreClients || clients == 0) }
         if (idle) cached?.let {
             // 关闭失败时保留记录，下一次连接会先完成清理。
             close(it)
             cached = null
         }
+        return idle
     }
 }

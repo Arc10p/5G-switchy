@@ -10,6 +10,12 @@ internal class RootShellSession<T>(
     var rootAvailable: Boolean? = null
         private set
 
+    fun release() {
+        cached?.let { close(it) }
+        cached = null
+        rootAvailable = null
+    }
+
     fun acquire(create: () -> T): T {
         cached?.let {
             if (isAlive(it)) return it

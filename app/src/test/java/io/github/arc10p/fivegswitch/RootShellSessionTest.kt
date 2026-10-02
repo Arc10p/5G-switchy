@@ -11,6 +11,33 @@ class RootShellSessionTest {
         { it.alive }, { it.uid }, { it.closed = true; it.alive = false },
     )
 
+    @Test fun `Root 退出后主动关闭 su 下次连接创建新会话`() {
+        val sessions = sessions()
+        val first = sessions.acquire { Session(0) }
+        sessions.release()
+        assertTrue(first.closed)
+        assertNull(sessions.rootAvailable)
+        val second = sessions.acquire { Session(0) }
+        assertNotSame(first, second)
+        assertEquals(true, sessions.rootAvailable)
+    }
+
+    @Test fun `su 关闭失败保留会话供下一次释放重试`() {
+        var allowClose = false
+        val sessions = RootShellSession<Session>({ it.alive }, { it.uid }, {
+            check(allowClose) { "关闭尚未完成" }
+            it.closed = true
+            it.alive = false
+        })
+        val first = sessions.acquire { Session(0) }
+        assertThrows(IllegalStateException::class.java) { sessions.release() }
+        assertSame(first, sessions.acquire { error("不能遗漏未关闭的旧 su") })
+        allowClose = true
+        sessions.release()
+        assertTrue(first.closed)
+        assertNotSame(first, sessions.acquire { Session(0) })
+    }
+
     @Test fun `已验证的活会话复用时不再次发起授权`() {
         val sessions = sessions()
         val first = sessions.acquire { Session(0) }

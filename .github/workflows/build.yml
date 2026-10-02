@@ -34,11 +34,37 @@ jobs:
         run: ./gradlew --no-daemon assembleDebug
 
       - name: Run unit tests, lint and release shrinker
-        run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleRelease
+        run: ./gradlew --no-daemon testDebugUnitTest lintDebug lintRelease assembleRelease
+
+      - name: Export runtime dependencies
+        run: ./gradlew --no-daemon :app:dependencies --configuration releaseRuntimeClasspath > app/build/release-runtime-dependencies.txt
+
+      - name: Inspect APK signatures and flags
+        run: |
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk > app/build/release-apk-signature.txt
+          "$ANDROID_HOME/build-tools/34.0.0/aapt2" dump badging app/build/outputs/apk/release/app-release.apk > app/build/release-apk-flags.txt
+          "$ANDROID_HOME/build-tools/34.0.0/aapt2" dump badging app/build/outputs/apk/debug/app-debug.apk > app/build/debug-apk-flags.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: 5GSwitch-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: 5GSwitch-release
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Upload shrinker reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: 5GSwitch-build-reports
+          path: |
+            app/build/outputs/mapping/release/
+            app/build/release-runtime-dependencies.txt
+            app/build/*-apk-*.txt
           if-no-files-found: error

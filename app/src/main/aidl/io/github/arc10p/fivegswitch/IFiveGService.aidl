@@ -4,6 +4,7 @@ package io.github.arc10p.fivegswitch;
 interface IFiveGService {
     int getRootUid();
     int getRootPid();
+    int[] getMemoryStats();
     boolean checkCompatibility(int subId);
     long getUserMask(int subId);
     boolean setUserMask(int subId, long mask);

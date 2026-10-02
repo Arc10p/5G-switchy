@@ -6,6 +6,56 @@ import org.junit.Test
 class RootConnectionTest {
     private class Connection { var alive = true }
 
+    @Test fun `快捷面板仍展开时宽限结束也释放空闲 Root 连接`() {
+        var closed = 0
+        val scope = ConnectionScope<Connection>({ it.alive }, { it.alive = false; closed++ })
+        scope.retainClient()
+        scope.beginOperation()
+        scope.connection { Connection() }
+        scope.endOperation()
+        assertFalse(scope.closeIfIdle())
+        assertTrue(scope.closeIfIdle(ignoreClients = true))
+        assertEquals(1, closed)
+        assertNull(scope.currentConnection)
+        val next = scope.connection { Connection() }
+        assertTrue(next.alive)
+    }
+
+    @Test fun `宽限超时不能关闭正在执行或排队操作所需的连接`() {
+        var closed = 0
+        val scope = ConnectionScope<Connection>({ it.alive }, { closed++ })
+        scope.retainClient()
+        scope.beginOperation()
+        scope.beginOperation()
+        val connection = scope.connection { Connection() }
+        scope.endOperation()
+        assertFalse(scope.closeIfIdle(ignoreClients = true))
+        assertSame(connection, scope.currentConnection)
+        assertEquals(0, closed)
+        scope.endOperation()
+        assertTrue(scope.closeIfIdle(ignoreClients = true))
+        assertEquals(1, closed)
+    }
+
+    @Test fun `空闲释放遇到旧进程未退出仍保留缓存并禁止重绑`() {
+        var allowClose = false
+        var created = 0
+        val scope = ConnectionScope<Connection>({ it.alive }, {
+            it.alive = false
+            check(allowClose) { "旧 Root 进程仍在退出" }
+        })
+        scope.retainClient()
+        val original = scope.connection { created++; Connection() }
+        assertThrows(IllegalStateException::class.java) { scope.closeIfIdle(ignoreClients = true) }
+        assertSame(original, scope.currentConnection)
+        assertThrows(IllegalStateException::class.java) { scope.connection { created++; Connection() } }
+        assertEquals(1, created)
+        allowClose = true
+        assertTrue(scope.closeIfIdle(ignoreClients = true))
+        scope.connection { created++; Connection() }
+        assertEquals(2, created)
+    }
+
     @Test fun `界面可见时刷新与切换复用连接不触发退出`() {
         var closed = 0
         val scope = ConnectionScope<Connection>({ it.alive }, { it.alive = false; closed++ })

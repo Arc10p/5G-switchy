@@ -1,6 +1,9 @@
 package io.github.arc10p.fivegswitch
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.os.Bundle
 import android.view.WindowInsets
 import android.widget.Button
@@ -33,6 +36,19 @@ class MainActivity : Activity() {
         }
         toggle.setOnClickListener {
             if (latest?.success != true) refresh() else change()
+        }
+        findViewById<Button>(R.id.memory_diagnostics).setOnClickListener { view ->
+            view.isEnabled = false
+            FiveGController.memoryReport { report ->
+                if (!isDestroyed) {
+                    view.isEnabled = true
+                    AlertDialog.Builder(this).setTitle(R.string.memory_diagnostics)
+                        .setMessage(report).setPositiveButton(R.string.copy) { _, _ ->
+                            getSystemService(ClipboardManager::class.java)
+                                .setPrimaryClip(ClipData.newPlainText("5G Switch 内存诊断", report))
+                        }.setNegativeButton(R.string.close, null).show()
+                }
+            }
         }
     }
 

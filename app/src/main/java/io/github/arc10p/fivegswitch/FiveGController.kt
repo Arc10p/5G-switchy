@@ -12,9 +12,11 @@ import android.util.Log
 import com.topjohnwu.superuser.Shell
 import com.topjohnwu.superuser.ipc.RootService
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 object FiveGController {
     data class DataSim(val subId: Int, val slotIndex: Int)
@@ -36,9 +38,13 @@ object FiveGController {
         val success: Boolean get() = error == null
     }
 
-    private val executor = Executors.newSingleThreadExecutor { Thread(it, "5G-controller") }
+    private val executor = ThreadPoolExecutor(1, 1, 10, TimeUnit.SECONDS,
+        LinkedBlockingQueue(), { Thread(it, "5G-controller") }).apply { allowCoreThreadTimeOut(true) }
     private val main = Handler(Looper.getMainLooper())
     private val modifying = AtomicBoolean(false)
+    private val cleanupGeneration = AtomicLong()
+    private var lastRootMemory: IntArray? = null
+    private var lastIdleMemory: IntArray? = null
     private val connections = ConnectionScope<RootBinding>({ it.canReuse }, { it.releaseAndAwait() })
     private val rootShells = RootShellSession<Shell>({ it.isAlive }, { shell ->
         val stdout = ArrayList<String>()
@@ -56,7 +62,7 @@ object FiveGController {
             "su UID 验证失败：exitCode=${result.code} stdout=${stdout.joinToString(" ").take(512)} " +
                 "stderr=${stderr.joinToString(" ").take(512)}"
         }
-        Log.i("5GSwitch", "su 实际 UID=$uid libsuStatus=${shell.status}")
+        if (BuildConfig.DEBUG) Log.i("5GSwitch", "su 实际 UID=$uid libsuStatus=${shell.status}")
         uid
     }, { it.close() })
     @Volatile private var pendingLaunch: Shell.Task? = null
@@ -67,14 +73,49 @@ object FiveGController {
 
     fun releaseClient() {
         connections.releaseClient()
+        cleanupGeneration.incrementAndGet()
         executor.execute { closeIfIdle() }
     }
 
-    private fun closeIfIdle() {
+    private fun closeIfIdle(ignoreClients: Boolean = false) {
         try {
-            connections.closeIfIdle()
+            val hadConnection = connections.currentConnection != null
+            if (connections.closeIfIdle(ignoreClients)) {
+                // 先确认 app_process 已退出，再关闭 su，避免部分 Root 实现连带杀掉活跃子进程。
+                rootShells.release()
+                if (hadConnection) lastIdleMemory = MemorySnapshot.capture()
+            }
         } catch (e: Exception) {
             Log.w("5GSwitch", "等待旧 RootService 退出：${e.message}")
+        }
+    }
+
+    private fun scheduleIdleRelease() {
+        val generation = cleanupGeneration.incrementAndGet()
+        main.postDelayed({
+            executor.execute {
+                if (generation == cleanupGeneration.get()) closeIfIdle(ignoreClients = true)
+            }
+        }, 1000)
+    }
+
+    fun memoryReport(callback: (String) -> Unit) {
+        // 只观察现有连接，诊断不会创建 RootService 或触发 Root 授权。
+        executor.execute {
+            val report = buildString {
+                appendLine("版本 ${BuildConfig.VERSION_NAME} · ${if (BuildConfig.DEBUG) "Debug" else "Release"}")
+                appendLine(MemorySnapshot.describe("本次应用采样", MemorySnapshot.capture()))
+                val binding = connections.currentConnection
+                val live = binding?.currentService()
+                appendLine("当前 RootService：${if (live != null) "已连接" else if (binding != null) "连接待确认或正在退出" else "无连接，已释放"}")
+                if (live != null) try {
+                    appendLine(MemorySnapshot.describe("本次 Root 采样", live.memoryStats))
+                } catch (e: Exception) { appendLine("Root 采样失败：${e.message}") }
+                lastIdleMemory?.let { appendLine(MemorySnapshot.describe("最近一次释放后应用采样（历史）", it)) }
+                lastRootMemory?.let { appendLine(MemorySnapshot.describe("最近一次 Root 活跃采样（历史，非当前占用）", it)) }
+                append("PSS 按共享页面分摊；RSS 包含共享映射。Java/Native 堆不能代替进程总内存。")
+            }
+            main.post { callback(report) }
         }
     }
 
@@ -105,6 +146,7 @@ object FiveGController {
     }
 
     private fun execute(context: Context, enabled: Boolean?, modification: Boolean, callback: (Result) -> Unit) {
+        cleanupGeneration.incrementAndGet()
         connections.beginOperation()
         executor.execute {
             var binding: RootBinding? = null
@@ -112,14 +154,16 @@ object FiveGController {
                 val currentBinding = connections.connection { RootBinding(context) }
                 binding = currentBinding
                 val service = currentBinding.connect()
-                Log.i("5GSwitch", "RootService pid=${service.rootPid}")
+                if (BuildConfig.DEBUG) Log.i("5GSwitch", "RootService pid=${service.rootPid}")
+                try { lastRootMemory = service.memoryStats }
+                catch (e: Exception) { Log.w("5GSwitch", "Root 内存采样失败：${e.message}") }
                 val access = object : TelephonyAccess {
                     override fun getRootUid() = service.rootUid
                     override fun checkCompatibility(subId: Int) = service.checkCompatibility(subId)
                     override fun getUserMask(subId: Int) = service.getUserMask(subId)
                     override fun setUserMask(subId: Int, mask: Long) = service.setUserMask(subId, mask)
                 }
-                FiveGBackend(access, { getDefaultDataSim() }, { Log.i("5GSwitch", it) })
+                FiveGBackend(access, { getDefaultDataSim() }, { if (BuildConfig.DEBUG) Log.i("5GSwitch", it) })
                     .run(enabled, toggle = modification && enabled == null)
             } catch (e: Exception) {
                 val root = binding?.rootAvailable
@@ -136,6 +180,7 @@ object FiveGController {
             } finally {
                 connections.endOperation()
                 closeIfIdle()
+                scheduleIdleRelease()
                 if (modification) modifying.set(false)
             }
             if (modification) lastOperation = result
@@ -160,6 +205,8 @@ object FiveGController {
         val isAlive: Boolean get() = !released.get() && remoteBinder?.isBinderAlive == true && service != null
         val canReuse: Boolean get() = !released.get() && failure == null &&
             (remoteBinder == null || isAlive)
+
+        fun currentService(): IFiveGService? = service?.takeIf { isAlive }
 
         fun connect(): IFiveGService {
             service?.takeIf { isAlive }?.let { return it }
@@ -221,7 +268,7 @@ object FiveGController {
             pendingLaunch = null
             connected.countDown()
             // 若连接在界面退出后迟到，空闲清理会负责解绑并确认进程死亡。
-            executor.execute { closeIfIdle() }
+            executor.execute { closeIfIdle(); scheduleIdleRelease() }
         }
 
         override fun onServiceDisconnected(name: ComponentName) {

@@ -29,12 +29,13 @@ class FiveGRootService : RootService() {
             if (e is VirtualMachineError || e is ThreadDeath) throw e
             "电话隐藏接口豁免设置失败：${e.javaClass.simpleName}: ${e.message}"
         }
-        Log.i("5GSwitch", hiddenApiStatus)
+        if (BuildConfig.DEBUG) Log.i("5GSwitch", hiddenApiStatus)
     }
 
     private val controller = object : IFiveGService.Stub() {
         override fun getRootUid(): Int = Process.myUid()
         override fun getRootPid(): Int = Process.myPid()
+        override fun getMemoryStats(): IntArray = call("getMemoryStats()") { MemorySnapshot.capture() }
 
         override fun checkCompatibility(subId: Int): Boolean = call("checkCompatibility(subId=$subId)") {
             // 与 LuckyTool 使用相同的直接调用链；刷新只读取，写入结果在实际切换时检查。
@@ -52,7 +53,7 @@ class FiveGRootService : RootService() {
                 val receiver = phone()
                 // 四参数接口传入本应用自己的包身份，不冒用系统设置或其他应用。
                 val identity = packageName
-                Log.i("5GSwitch", "${writer.signature} packageIdentity=$identity subId=$subId mask=$mask")
+                if (BuildConfig.DEBUG) Log.i("5GSwitch", "${writer.signature} packageIdentity=$identity subId=$subId mask=$mask")
                 writer.write(receiver, subId, TelephonyManager.ALLOWED_NETWORK_TYPES_REASON_USER, mask, identity)
             }
     }
@@ -76,7 +77,7 @@ class FiveGRootService : RootService() {
                     "$hiddenApiStatus\n系统电话接口：${networkTypeSignatures()}", e)
             }
         }
-            .also { Log.i("5GSwitch", "$operation → $it") }
+            .also { if (BuildConfig.DEBUG) Log.i("5GSwitch", "$operation → $it") }
 
     private fun networkTypeSignatures(): String = try {
         HiddenApiBypass.getDeclaredMethods(ITelephony::class.java).filterIsInstance<Method>()

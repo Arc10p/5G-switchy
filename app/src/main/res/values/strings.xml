@@ -20,4 +20,7 @@
     <string name="state_note">显示 USER 配置中是否允许 NR，实际 5G 连接还取决于运营商、信号及系统其他限制。</string>
     <string name="tile_error">5G 切换失败，请打开应用查看诊断信息。</string>
     <string name="tile_description">5G 配置：%1$s</string>
+    <string name="memory_diagnostics">内存诊断</string>
+    <string name="copy">复制</string>
+    <string name="close">关闭</string>
 </resources>

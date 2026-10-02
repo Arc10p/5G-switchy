@@ -12,15 +12,17 @@ android {
         applicationId = "io.github.arc10p.fivegswitch"
         minSdk = 31
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.0.3"
+        versionCode = 5
+        versionName = "1.0.4"
     }
 
     buildTypes {
         release {
+            isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 
@@ -33,6 +35,7 @@ android {
     }
     buildFeatures {
         aidl = true
+        buildConfig = true
     }
 }
 
