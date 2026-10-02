@@ -4,7 +4,6 @@ import android.content.Intent
 import android.os.IBinder
 import android.os.Process
 import android.os.ServiceManager
-import android.os.ServiceSpecificException
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.util.Log
@@ -44,6 +43,6 @@ class FiveGRootService : RootService() {
         block().also { Log.i("5GSwitch", "$operation → $it") }
     } catch (e: Exception) {
         Log.e("5GSwitch", operation, e)
-        throw ServiceSpecificException(1, "$operation: ${e.javaClass.simpleName}: ${e.message}")
+        throw IllegalStateException("$operation: ${e.javaClass.simpleName}: ${e.message}", e)
     }
 }

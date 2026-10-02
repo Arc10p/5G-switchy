@@ -9,6 +9,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.telephony.SubscriptionManager
 import android.util.Log
+import com.topjohnwu.superuser.Shell
 import com.topjohnwu.superuser.ipc.RootService
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -38,8 +39,13 @@ object FiveGController {
     private val executor = Executors.newSingleThreadExecutor { Thread(it, "5G-controller") }
     private val main = Handler(Looper.getMainLooper())
     private val modifying = AtomicBoolean(false)
+    @Volatile private var pendingLaunch: Shell.Task? = null
     @Volatile var lastOperation: Result? = null
         private set
+
+    init {
+        Shell.setDefaultBuilder(Shell.Builder.create().setTimeout(60))
+    }
 
     fun getDefaultDataSubId(): Int = SubscriptionManager.getDefaultDataSubscriptionId()
 
@@ -101,15 +107,30 @@ object FiveGController {
         @Volatile private var failure: String? = null
 
         fun connect(): IFiveGService {
+            // 先授权，再创建 libsu 绑定任务，拒绝授权不会留下启动中标记。
+            val shell = Shell.getShell()
+            if (!shell.isRoot) {
+                shell.close()
+                error("未取得 Root 权限，请在 Root 管理器中授权后重试")
+            }
+            val prepared = CountDownLatch(1)
             // libsu 绑定必须在主线程；只有等待与电话 Binder 调用在工作线程。
             main.post {
                 if (!released.get()) try {
-                    RootService.bind(intent, this)
+                    RootService.bindOrTask(intent, { task -> main.post(task) }, this)?.let {
+                        pendingLaunch = it
+                    }
                 } catch (e: Exception) {
                     failure = "${e.javaClass.simpleName}: ${e.message}"
                     connected.countDown()
+                } finally {
+                    prepared.countDown()
                 }
             }
+            check(prepared.await(60, TimeUnit.SECONDS)) { "主线程未能准备 RootService 绑定" }
+            if (failure != null) error(failure!!)
+            // 启动无响应时保留可重执行的任务，下一次重试仍能发起 root 进程。
+            if (connected.count > 0) pendingLaunch?.let { shell.execTask(it) }
             check(connected.await(60, TimeUnit.SECONDS)) { "等待 Root 授权或 RootService 连接超时（60 秒）" }
             return service ?: error(failure ?: "RootService 未返回 Binder")
         }
@@ -120,6 +141,7 @@ object FiveGController {
                 return
             }
             service = IFiveGService.Stub.asInterface(binder)
+            pendingLaunch = null
             connected.countDown()
         }
 
@@ -208,8 +230,10 @@ internal class FiveGBackend(
             telephony.getUserMask(currentSim.subId)
         }
         if (mask < 0) throw Failure(FiveGController.Error.READ_FAILED, "无效 USER mask=$mask，subId=${currentSim.subId}。")
-        if (sim() != currentSim) throw Failure(FiveGController.Error.DEFAULT_SIM_UNAVAILABLE,
-            "读取期间默认数据 SIM 已改变，请重试。")
+        if (sim() != currentSim) {
+            state = state.copy(sim = null, mask = null)
+            throw Failure(FiveGController.Error.DEFAULT_SIM_UNAVAILABLE, "读取期间默认数据 SIM 已改变，请重试。")
+        }
         state = state.copy(mask = mask)
         log("subId=${currentSim.subId} slotIndex=${currentSim.slotIndex} currentMask=$mask")
     }
