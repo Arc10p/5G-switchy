@@ -84,6 +84,24 @@ class RootConnectionTest {
         assertEquals(2, created)
     }
 
+    @Test fun `连接回调未到时保留同一待连接记录供重试`() {
+        var bound = false
+        var created = 0
+        var closed = 0
+        val scope = ConnectionScope<Connection>({ it.alive }, {
+            check(bound) { "启动尚未确认，不能创建与迟到回调竞争的新连接" }
+            it.alive = false
+            closed++
+        })
+        val pending = scope.connection { created++; Connection() }
+        assertThrows(IllegalStateException::class.java) { scope.closeIfIdle() }
+        assertSame(pending, scope.connection { created++; Connection() })
+        assertEquals(1, created)
+        bound = true
+        scope.closeIfIdle()
+        assertEquals(1, closed)
+    }
+
     @Test fun `setter 链接错误转换成可传递诊断而非杀死 root 进程`() {
         val original = NoSuchMethodError("setAllowedNetworkTypesForReason")
         var logged: Throwable? = null

@@ -6,7 +6,7 @@
 
 在 [Actions](https://github.com/Arc10p/5G-switchy/actions) 打开对应分支最新成功的 **Build APK**，下载 **5GSwitch-debug** Artifact，解压安装 `app-debug.apk`。首次打开时在 Root 管理器中授权。控制中心 → 编辑磁贴 → 添加 **5G**；锁屏切换需先解锁。
 
-用户电脑无需 Android Studio、Android SDK 或 Gradle。推送、PR 自动构建；工作流合入默认分支后可手动触发。CI 使用 JDK 17、SDK 35、Build Tools 34.0.0 和完整 Gradle 8.9 Wrapper，执行 `./gradlew assembleDebug`、26 项单元测试、lint 及 Release 压缩校验。
+用户电脑无需 Android Studio、Android SDK 或 Gradle。推送、PR 自动构建；工作流合入默认分支后可手动触发。CI 使用 JDK 17、SDK 35、Build Tools 34.0.0 和完整 Gradle 8.9 Wrapper，执行 `./gradlew assembleDebug`、27 项单元测试、lint 及 Release 压缩校验。
 
 Debug 产物：`app/build/outputs/apk/debug/app-debug.apk`。Release 开启代码/资源压缩，未配置签名。开发机自行构建需 JDK 17 和 SDK，可用 `ANDROID_HOME`，不依赖 `local.properties`。
 

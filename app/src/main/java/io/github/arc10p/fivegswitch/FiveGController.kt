@@ -39,7 +39,7 @@ object FiveGController {
     private val executor = Executors.newSingleThreadExecutor { Thread(it, "5G-controller") }
     private val main = Handler(Looper.getMainLooper())
     private val modifying = AtomicBoolean(false)
-    private val connections = ConnectionScope<RootBinding>({ it.isAlive }, { it.releaseAndAwait() })
+    private val connections = ConnectionScope<RootBinding>({ it.canReuse }, { it.releaseAndAwait() })
     @Volatile private var pendingLaunch: Shell.Task? = null
     @Volatile var lastOperation: Result? = null
         private set
@@ -125,10 +125,13 @@ object FiveGController {
         private val unbound = CountDownLatch(1)
         private val died = CountDownLatch(1)
         @Volatile private var remoteBinder: IBinder? = null
+        @Volatile private var requested = false
         @Volatile private var service: IFiveGService? = null
         @Volatile private var failure: String? = null
 
         val isAlive: Boolean get() = !released.get() && remoteBinder?.isBinderAlive == true && service != null
+        val canReuse: Boolean get() = !released.get() && failure == null &&
+            (remoteBinder == null || isAlive)
 
         fun connect(): IFiveGService {
             service?.takeIf { isAlive }?.let { return it }
@@ -138,21 +141,24 @@ object FiveGController {
                 shell.close()
                 error("未取得 Root 权限，请在 Root 管理器中授权后重试")
             }
-            val prepared = CountDownLatch(1)
             // libsu 绑定必须在主线程；只有等待与电话 Binder 调用在工作线程。
-            main.post {
-                if (!released.get()) try {
-                    RootService.bindOrTask(intent, { task -> main.post(task) }, this)?.let {
-                        pendingLaunch = it
+            if (!requested) {
+                val prepared = CountDownLatch(1)
+                main.post {
+                    if (!released.get()) try {
+                        RootService.bindOrTask(intent, { task -> main.post(task) }, this)?.let {
+                            pendingLaunch = it
+                        }
+                        requested = true
+                    } catch (e: Exception) {
+                        failure = "${e.javaClass.simpleName}: ${e.message}"
+                        connected.countDown()
+                    } finally {
+                        prepared.countDown()
                     }
-                } catch (e: Exception) {
-                    failure = "${e.javaClass.simpleName}: ${e.message}"
-                    connected.countDown()
-                } finally {
-                    prepared.countDown()
                 }
+                check(prepared.await(60, TimeUnit.SECONDS)) { "主线程未能准备 RootService 绑定" }
             }
-            check(prepared.await(60, TimeUnit.SECONDS)) { "主线程未能准备 RootService 绑定" }
             if (failure != null) error(failure!!)
             // 启动无响应时保留可重执行的任务，下一次重试仍能发起 root 进程。
             if (connected.count > 0) pendingLaunch?.let { shell.execTask(it) }
@@ -183,6 +189,8 @@ object FiveGController {
             service = IFiveGService.Stub.asInterface(binder)
             pendingLaunch = null
             connected.countDown()
+            // 若连接在界面退出后迟到，空闲清理会负责解绑并确认进程死亡。
+            executor.execute { closeIfIdle() }
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -199,6 +207,12 @@ object FiveGController {
         }
 
         fun releaseAndAwait() {
+            if (requested && remoteBinder == null && failure == null) {
+                // 超时不代表启动取消。保留待连接记录，不能清空后与迟到回调竞速。
+                check(connected.await(5, TimeUnit.SECONDS) && remoteBinder != null) {
+                    "RootService 启动尚未确认，保留待连接记录供重试"
+                }
+            }
             if (released.compareAndSet(false, true)) {
                 main.post {
                     try { unbind() } finally { unbound.countDown() }
