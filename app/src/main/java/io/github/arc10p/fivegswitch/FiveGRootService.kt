@@ -13,9 +13,17 @@ import com.topjohnwu.superuser.ipc.RootService
 class FiveGRootService : RootService() {
     private val controller = object : IFiveGService.Stub() {
         override fun getRootUid(): Int = Process.myUid()
+        override fun getRootPid(): Int = Process.myPid()
 
-        override fun checkCompatibility(subId: Int): Boolean =
+        override fun checkCompatibility(subId: Int): Boolean = call("checkCompatibility(subId=$subId)") {
+            // 在 root 进程核对系统真实方法，不能只验证 getter 就认定 setter 可链接。
+            val setter = ITelephony::class.java.getMethod("setAllowedNetworkTypesForReason",
+                Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, Long::class.javaPrimitiveType)
+            check(setter.returnType == Boolean::class.javaPrimitiveType) {
+                "ITelephony setter 返回类型不兼容：${setter.returnType.name}"
+            }
             getUserMask(subId) >= 0L
+        }
 
         override fun getUserMask(subId: Int): Long = call("getAllowedNetworkTypesForReason(subId=$subId, reason=USER)") {
             require(SubscriptionManager.isValidSubscriptionId(subId)) { "无效 subscriptionId：$subId" }
@@ -39,10 +47,7 @@ class FiveGRootService : RootService() {
         return ITelephony.Stub.asInterface(binder) ?: error("ITelephony 不可用")
     }
 
-    private inline fun <T> call(operation: String, block: () -> T): T = try {
-        block().also { Log.i("5GSwitch", "$operation → $it") }
-    } catch (e: Exception) {
-        Log.e("5GSwitch", operation, e)
-        throw IllegalStateException("$operation: ${e.javaClass.simpleName}: ${e.message}", e)
-    }
+    private inline fun <T> call(operation: String, block: () -> T): T =
+        BinderCalls.call(operation, { Log.e("5GSwitch", operation, it) }, block)
+            .also { Log.i("5GSwitch", "$operation → $it") }
 }

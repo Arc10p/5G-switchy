@@ -41,6 +41,16 @@ class MainActivity : Activity() {
         refresh()
     }
 
+    override fun onStart() {
+        super.onStart()
+        FiveGController.retainClient()
+    }
+
+    override fun onStop() {
+        FiveGController.releaseClient()
+        super.onStop()
+    }
+
     private fun refresh() {
         val token = ++request
         loading()

@@ -11,6 +11,7 @@ class FiveGTileService : TileService() {
 
     override fun onStartListening() {
         super.onStartListening()
+        if (!listening) FiveGController.retainClient()
         listening = true
         val token = ++generation
         if (busy) return
@@ -20,9 +21,17 @@ class FiveGTileService : TileService() {
     }
 
     override fun onStopListening() {
+        if (listening) FiveGController.releaseClient()
         listening = false
         generation++
         super.onStopListening()
+    }
+
+    override fun onDestroy() {
+        if (listening) FiveGController.releaseClient()
+        listening = false
+        generation++
+        super.onDestroy()
     }
 
     override fun onClick() {

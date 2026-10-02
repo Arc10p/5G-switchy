@@ -214,4 +214,28 @@ class FiveGBackendTest {
         assertEquals(FiveGController.Error.READ_FAILED, backend(device).run(toggle = true).error)
         assertFalse(device.calls.any { it.startsWith("set:") })
     }
+
+    @Test fun `写入时 Binder 死亡不能自动重放 toggle`() {
+        val device = Device()
+        var dead = false
+        var writes = 0
+        val access = object : TelephonyAccess by device {
+            override fun setUserMask(subId: Int, mask: Long): Boolean {
+                writes++
+                dead = true
+                // 模拟已经写入但响应丢失，重放 toggle 会反向修改状态。
+                device.mask = mask
+                error("DeadObjectException")
+            }
+            override fun checkCompatibility(subId: Int): Boolean {
+                if (dead) error("DeadObjectException")
+                return true
+            }
+        }
+        val result = backend(access).run(toggle = true)
+        assertEquals(FiveGController.Error.UPDATE_FAILED, result.error)
+        assertEquals(1, writes)
+        assertNull(result.state.mask)
+        assertTrue(device.mask and NetworkTypes.NR != 0L)
+    }
 }

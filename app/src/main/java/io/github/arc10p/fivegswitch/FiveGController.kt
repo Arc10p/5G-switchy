@@ -39,12 +39,28 @@ object FiveGController {
     private val executor = Executors.newSingleThreadExecutor { Thread(it, "5G-controller") }
     private val main = Handler(Looper.getMainLooper())
     private val modifying = AtomicBoolean(false)
+    private val connections = ConnectionScope<RootBinding>({ it.isAlive }, { it.releaseAndAwait() })
     @Volatile private var pendingLaunch: Shell.Task? = null
     @Volatile var lastOperation: Result? = null
         private set
 
     init {
         Shell.setDefaultBuilder(Shell.Builder.create().setTimeout(60))
+    }
+
+    fun retainClient() = connections.retainClient()
+
+    fun releaseClient() {
+        connections.releaseClient()
+        executor.execute { closeIfIdle() }
+    }
+
+    private fun closeIfIdle() {
+        try {
+            connections.closeIfIdle()
+        } catch (e: Exception) {
+            Log.w("5GSwitch", "等待旧 RootService 退出：${e.message}")
+        }
     }
 
     fun getDefaultDataSubId(): Int = SubscriptionManager.getDefaultDataSubscriptionId()
@@ -74,10 +90,12 @@ object FiveGController {
     }
 
     private fun execute(context: Context, enabled: Boolean?, modification: Boolean, callback: (Result) -> Unit) {
+        connections.beginOperation()
         executor.execute {
-            val binding = RootBinding(context)
             val result = try {
+                val binding = connections.connection { RootBinding(context) }
                 val service = binding.connect()
+                Log.i("5GSwitch", "RootService pid=${service.rootPid}")
                 val access = object : TelephonyAccess {
                     override fun getRootUid() = service.rootUid
                     override fun checkCompatibility(subId: Int) = service.checkCompatibility(subId)
@@ -91,7 +109,8 @@ object FiveGController {
                 Log.e("5GSwitch", message, e)
                 Result(State(rootAvailable = false), message, Error.ROOT_UNAVAILABLE)
             } finally {
-                binding.release()
+                connections.endOperation()
+                closeIfIdle()
                 if (modification) modifying.set(false)
             }
             if (modification) lastOperation = result
@@ -103,10 +122,16 @@ object FiveGController {
         private val intent = Intent(context, FiveGRootService::class.java)
         private val connected = CountDownLatch(1)
         private val released = AtomicBoolean(false)
+        private val unbound = CountDownLatch(1)
+        private val died = CountDownLatch(1)
+        @Volatile private var remoteBinder: IBinder? = null
         @Volatile private var service: IFiveGService? = null
         @Volatile private var failure: String? = null
 
+        val isAlive: Boolean get() = !released.get() && remoteBinder?.isBinderAlive == true && service != null
+
         fun connect(): IFiveGService {
+            service?.takeIf { isAlive }?.let { return it }
             // 先授权，再创建 libsu 绑定任务，拒绝授权不会留下启动中标记。
             val shell = Shell.getShell()
             if (!shell.isRoot) {
@@ -140,6 +165,21 @@ object FiveGController {
                 unbind()
                 return
             }
+            remoteBinder = binder
+            try {
+                binder.linkToDeath({
+                    service = null
+                    failure = "RootService 进程已退出；若发生在写入期间，结果需要重新检测"
+                    Log.w("5GSwitch", failure!!)
+                    died.countDown()
+                    connected.countDown()
+                }, 0)
+            } catch (e: Exception) {
+                failure = "RootService 连接时已死亡：${e.message}"
+                died.countDown()
+                connected.countDown()
+                return
+            }
             service = IFiveGService.Stub.asInterface(binder)
             pendingLaunch = null
             connected.countDown()
@@ -158,9 +198,20 @@ object FiveGController {
             connected.countDown()
         }
 
-        fun release() {
-            released.set(true)
-            main.post { unbind() }
+        fun releaseAndAwait() {
+            if (released.compareAndSet(false, true)) {
+                main.post {
+                    try { unbind() } finally { unbound.countDown() }
+                }
+            }
+            check(unbound.await(5, TimeUnit.SECONDS)) { "主线程尚未完成 RootService 解绑" }
+            // libsu 的远程 unbind 是 oneway，返回并不代表 root 进程已经退出。
+            val binder = remoteBinder
+            if (binder != null && binder.isBinderAlive) {
+                check(died.await(5, TimeUnit.SECONDS) || !binder.isBinderAlive) {
+                    "旧 RootService 仍在退出，稍后重试，避免绑定即将死亡的进程"
+                }
+            }
         }
 
         private fun unbind() {
