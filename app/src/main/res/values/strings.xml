@@ -1,4 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">5G Switch</string>
+    <string name="root_label">Root 权限</string>
+    <string name="sim_label">默认数据 SIM</string>
+    <string name="five_g_label">5G 配置</string>
+    <string name="result_label">操作结果 / 诊断</string>
+    <string name="available">可用</string>
+    <string name="unavailable">不可用</string>
+    <string name="unknown">未知</string>
+    <string name="checking">正在检测…</string>
+    <string name="working">处理中…</string>
+    <string name="enabled">已开启</string>
+    <string name="disabled">已关闭</string>
+    <string name="enable_5g">开启 5G</string>
+    <string name="disable_5g">关闭 5G</string>
+    <string name="retry">重试检测</string>
+    <string name="sim_value">SIM %1$d · subscriptionId %2$d</string>
+    <string name="busy">已有切换正在执行，正在刷新真实状态。</string>
+    <string name="state_note">显示 USER 配置中是否允许 NR，实际 5G 连接还取决于运营商、信号及系统其他限制。</string>
+    <string name="tile_error">5G 切换失败，请打开应用查看诊断信息。</string>
+    <string name="tile_description">5G 配置：%1$s</string>
 </resources>
