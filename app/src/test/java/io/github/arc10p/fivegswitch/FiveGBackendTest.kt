@@ -50,7 +50,7 @@ class FiveGBackendTest {
     }) = FiveGBackend(device, sim)
 
     @Test fun `只改变 NR 位并保留任意其他位`() {
-        listOf(0L, 1L, 0x7FFFFL, 1L shl 40, Long.MAX_VALUE).forEach { mask ->
+        listOf(0L, 1L, 0x7FFFFL, 1L shl 40, Long.MAX_VALUE, Long.MIN_VALUE).forEach { mask ->
             val on = NetworkTypes.with5G(mask, true)
             assertEquals(mask and NetworkTypes.NR.inv(), on and NetworkTypes.NR.inv())
             assertEquals(mask and NetworkTypes.NR.inv(), NetworkTypes.with5G(mask, false))
@@ -220,10 +220,20 @@ class FiveGBackendTest {
         assertTrue(result.state.enabled!!)
     }
 
-    @Test fun `拒绝负数位掩码`() {
+    @Test fun `拒绝系统无效掩码哨兵负一`() {
         val device = Device().apply { mask = -1 }
         assertEquals(FiveGController.Error.READ_FAILED, backend(device).run(toggle = true).error)
         assertFalse(device.calls.any { it.startsWith("set:") })
+    }
+
+    @Test fun `有最高位的 Long 掩码完整保留而不截断`() {
+        val device = Device().apply { mask = Long.MIN_VALUE or (1L shl 18) or 1L }
+        val original = device.mask
+        val controller = backend(device)
+        assertTrue(controller.run(toggle = true).success)
+        assertEquals(original or NetworkTypes.NR, device.mask)
+        assertTrue(controller.run(toggle = true).success)
+        assertEquals(original, device.mask)
     }
 
     @Test fun `写入时 Binder 死亡不能自动重放 toggle`() {

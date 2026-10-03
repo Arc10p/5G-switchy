@@ -1,33 +1,35 @@
 # 5G Switch
 
-极简原生 Kotlin 应用：切换当前默认数据 SIM 的 USER 5G 配置，提供 **5G** 快捷设置磁贴。需要 Root、Android 12+；1.0.3 已在目标 ColorOS 17 设备验证读取与切换可用，1.0.4 优化资源释放并改为 Release 交付。
+极简原生 Kotlin 应用，用于 Root、Android 12+ 设备的默认数据 SIM 5G 开关，提供 **5G** 快捷设置磁贴。用户电脑无需安装 Android Studio、Android SDK 或 Gradle；GitHub Actions 构建。
+
+## 当前实现
+
+1.0.5 使用 **UI / TileService → 短命 su → 系统原生 service → phone Binder → ITelephony allowed network types**。不用 `cmd phone`。保留 1.0.3 已在目标 ColorOS 17 验证的电话接口语义，但新的原生客户端、元数据反射与 Parcel 输出仍需同设备验证。
+
+应用通过当前系统框架精确检查 getter `(int,int)->long`、setter `(int,int,long)->boolean` 或 `(int,int,long,String)->boolean`，读取实际 `ITelephony$Stub.TRANSACTION_*` 字段；事务号不写死、不扫描、不猜。未知接口或事务常量缺失时停止。四参数版本发送本应用包名。
+
+每次操作动态读取默认数据 subscriptionId，使用 USER reason 的原始 Long。开启只增加 NR 位，关闭只移除 NR 位，保留 LTE_CA 和其他位；Long 不转 Int。系统错误哨兵 `-1` 拒绝写入。按系统实际 boolean 返回及完整读回确认；切换默认卡时中止或报错。串行读改写、重复点击不排队反转、失败不重放写入。
+
+`su -c` 中先验证实际 UID 0，再执行 `/system/bin/service call phone`；使用动态事务号和 `i32`、`i64`、必要的 `s16` 参数。原生工具退出码不能代表 Binder 成功：回复需严格恢复为字节，由设备自己的 `Parcel.readException()` 处理异常及额外头，再检查 long/boolean 载荷长度。空、截断、未知格式或额外对象都报错。
+
+## 内存方案
+
+1.0.4 真机报告中应用前台 PSS 37.3 MiB、RootService PSS 63.4 MiB；历史应用空闲 PSS 6.0 MiB，场景不同不能直接当成优化前后对比。RSS 含共享映射，不能等同于私有占用。
+
+1.0.5 移除 libsu、RootService、应用 AIDL、hidden API stub 和 Root 连接生命周期代码，取消额外 app_process/ART。只保留 Kotlin 标准库和独立 HiddenApiBypass 6.1；没有 Compose、AppCompat、数据库或原生 ABI 库。只读取所需的系统方法与字段，避免枚举整个电话接口。
+
+Root 命令执行后随即退出，无常驻 Root shell；输出上限 32 KiB、双流排空、60 秒超时。超时终止客户端，不保证厂商 Root 管理器已取消远端写入，因此结果未知且不自动重试。主界面使用软件绘制，控制线程空闲 10 秒回收；不强杀 Android 绑定中的磁贴进程。Release 开启代码/资源压缩、禁用调试。
+
+应用 **内存诊断** 仅读取当前应用，列出 PSS、私有页、RSS、Java/Native 堆以及 Graphics、Code、Stack 等系统分类，显示最近命令的历史 PID 和操作结束间隔，不启动 su、也不轮询。最低稳态目标是只保留 Android 必须维持的应用/磁贴进程；具体 MiB 必须真机测量。
 
 ## 安装与构建
 
-在 [Actions](https://github.com/Arc10p/5G-switchy/actions) 打开对应分支最新成功的 **Build APK**，下载 **5GSwitch-release** Artifact，解压安装 `app-release.apk`。首次打开时在 Root 管理器中授权。控制中心 → 编辑磁贴 → 添加 **5G**；锁屏切换需先解锁。Debug Artifact 留作同一次构建的对照。
+在 [Actions](https://github.com/Arc10p/5G-switchy/actions) 下载对应提交成功构建的 **5GSwitch-release**，解压安装 `app-release.apk`，首次使用授权 Root。控制中心编辑磁贴并添加 **5G**；锁屏点击先解锁。
 
-用户电脑无需 Android Studio、Android SDK 或 Gradle。推送、PR 自动构建；工作流合入默认分支后可手动触发。CI 使用 JDK 17、SDK 35、Build Tools 34.0.0 和完整 Gradle 8.9 Wrapper，执行 Debug 编译、46 项单元测试、Debug/Release lint 及 Release 压缩校验，并上传依赖与 R8 裁剪报告。
+CI 使用 JDK 17、SDK 35、Build Tools 34.0.0、Gradle 8.9 Wrapper，运行 Debug 编译、单元测试、Debug/Release lint 与 Release 构建，上传 Debug/Release APK、实际测试 XML、依赖与 R8 裁剪报告。Release 使用测试签名但非 debuggable；密钥可能随 runner 变化，签名不一致时需卸载旧版。正式发布需使用 Actions Secrets 中的固定密钥，禁止提交私钥。
 
-默认产物：`app/build/outputs/apk/release/app-release.apk`。Release 开启代码/资源压缩、禁用调试并删除日常调试日志，使用同次构建的测试密钥签名以便安装；正式发布应改用 Actions Secrets 中的固定私钥。Debug 产物为 `app/build/outputs/apk/debug/app-debug.apk`。开发机自行构建需 JDK 17 和 SDK，可用 `ANDROID_HOME`，不依赖 `local.properties`。
+## 真机验收
 
-## 5G 控制
+先确认原生客户端读取和三／四参数写入可用，开关前后完整 mask 只差 NR 位。验证默认数据卡切换、无 SIM、连续点击、锁屏、磁贴重新展开和失败后重新检测。状态表示 USER 配置允许 NR，实际连接仍受运营商、信号及其他 reason 限制。
 
-参考 LuckyTool 的最小 5G 链：**UI / TileService → 应用 AIDL → libsu RootService → ServiceManager("phone") → 系统 ITelephony**。依赖 libsu core/service 6.0.0，以及 LuckyTool 同版本的独立 HiddenApiBypass 6.1 库；不需要安装 LSPosed 或 Xposed 框架。两个 hidden API 类型通过 `compileOnly` 声明，不打入 APK。不使用 shell 电话命令、Compose、数据库或常驻后台服务。操作结束后复用连接最多约 1 秒；即使界面或磁贴继续可见，空闲后也解绑，确认旧 root 进程退出再允许重绑并关闭 su；控制线程空闲 10 秒后回收。关闭所有客户端时立即申请空闲清理，尚有操作或启动未确认则继续等待安全屏障。
-
-动态读取默认数据 subscriptionId，调用 `getAllowedNetworkTypesForReason(subId, ALLOWED_NETWORK_TYPES_REASON_USER)` 取得完整 `Long`。开启只 `mask or NETWORK_TYPE_BITMASK_NR`，关闭只 `mask and NETWORK_TYPE_BITMASK_NR.inv()`；通过 `setAllowedNetworkTypesForReason()` 写回，保留所有非 NR 位，包括 LTE_CA 及未知高位。
-
-操作在单线程执行，界面和磁贴共享防重入门闩。RootService 启动时只开放 ITelephony 类的隐藏接口访问，不以普通反射查找 setter 作为刷新门槛。写入时精确适配 `(int,int,long)` 和设备实际观察到的 `(int,int,long,String)` 两种 boolean 方法，四参数版本传本应用的 `packageName`，不硬编码 Binder 事务编号；字符串的厂商语义尚未由系统源码确认，仍需真机验证。不走会归一化 LTE_CA 位的 `TelephonyManager` 写入封装，完整目标掩码直接传给 Binder。检查实际 boolean 返回与完整读回值；刷新仅读取，默认卡变化时中止或报告错误。链接错误转换为可见诊断；真实调用找不到方法时显示系统接口签名及豁免状态。日志记录 root PID、实际签名、传入包身份与断连事件，标签 **5GSwitch**。写入时 Binder 死亡不会自动重放 toggle，需重新检测实际状态；磁贴失败显示不可用，可打开应用查看诊断。
-
-启动使用 libsu 独立 `su` 会话并通过 `/system/bin/id -u` 验证 UID 0，不自动退回普通 `sh`。启动失败保留异常原因，下一次重试重新创建；只有实际 UID 非 0 才显示 Root 不可用。已验证 Root 后的服务连接错误单独报告。
-
-## 已知问题与真机验收
-
-状态表示 **USER 配置允许 NR**，实际 5G 连接仍取决于运营商、信号、调制解调器和其他 reason。ColorOS 设置页可能不同步显示本应用修改；Root 授权或服务启动超过 60 秒会超时。普通应用进程不调用 hidden API，平台 Binder 的运行兼容仍需 ColorOS 17 真机确认。
-
-请验证 Root 授权/拒绝、完整 mask 开关前后仅 NR 位变化、双卡默认数据切换、无 SIM、连续点击、锁屏切换、磁贴重新展开、服务断开后重试，以及安装 Release 后 RootService 能否启动。Debug 签名可能随 CI runner 变化，覆盖安装失败时需先卸载旧版。未移植 LuckyTool 的其他 Hook 功能。
-
-## 内存验收
-
-保持快捷面板展开，等首次读取完成后至少 5 秒，检查 Scene 中 root 进程是否退出；再点击磁贴，确认重新启动、切换和再次释放。分别比较同一次 CI 的 Release/Debug、相同面板状态与测量口径。关闭面板后再观察空闲进程，不用切换瞬间的峰值代替静置占用。
-
-应用中的 **内存诊断** 按需采样当前应用 PSS、RSS、私有页及 Java/Native 堆，列出当前 Root 连接与历史 Root 活跃采样，可复制结果。诊断不会创建 RootService，也不定时轮询。PSS 分摊共享页，RSS 包含系统共享映射，不能将所有 RSS 直接相加当成应用私有内存；APK 缩小也不等于 RAM 同比例下降。Android SDK/framework 不整套打入 APK，裁剪报告用于检查实际运行依赖。
+分别在“主界面打开”和“仅快捷面板打开”的相同状态静置至少 5 秒，比较 1.0.4 与 1.0.5 的 PSS、私有页和 Graphics；确认无 Root app_process 常驻，再次切换仍可用。新架构与软件绘制的内存收益未经真机测量，不将 APK 大小作为 RAM 指标。
