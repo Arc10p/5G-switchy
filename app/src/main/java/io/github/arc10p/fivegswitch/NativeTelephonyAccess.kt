@@ -10,13 +10,14 @@ internal interface ReplyDecoder {
 
 internal object AndroidReplyDecoder : ReplyDecoder {
     private fun <T> decode(bytes: ByteArray, payloadSize: Int, read: (Parcel) -> T): T {
-        require(bytes.size >= 4 && bytes.size % 4 == 0) { "电话回复缺少异常头或未按四字节对齐" }
+        val payload = ReplyHeader.payloadOffset(bytes, payloadSize)
         val parcel = Parcel.obtain()
         return try {
             parcel.unmarshall(bytes, 0, bytes.size)
             parcel.setDataPosition(0)
             // 使用设备自身实现处理异常、StrictMode 和 AppOps 回复头。
             parcel.readException()
+            require(payload != null && parcel.dataPosition() == payload) { "电话回复头实际读取位置不符" }
             require(parcel.dataAvail() == payloadSize) { "电话回复长度不符：剩余 ${parcel.dataAvail()}，预期 $payloadSize" }
             read(parcel).also { require(parcel.dataAvail() == 0) }
         } finally { parcel.recycle() }

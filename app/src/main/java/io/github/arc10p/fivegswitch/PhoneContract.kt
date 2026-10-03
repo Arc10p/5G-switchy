@@ -24,7 +24,7 @@ internal data class PhoneContract(
                 it.parameterTypes.contentEquals(arrayOf(intType, intType)) }
                 ?: throw NoSuchMethodException("不支持或含混的电话读取接口：${getters.joinToString()}")
             val setters = methods.filter { it.name == SETTER }
-            val base = arrayOf(intType, intType, longType)
+            val base = arrayOf<Class<*>>(intType, intType, longType)
             val matches = setters.filter { it.returnType == Boolean::class.javaPrimitiveType &&
                 (it.parameterTypes.contentEquals(base) ||
                     it.parameterTypes.contentEquals(base + String::class.java)) }
@@ -48,7 +48,7 @@ internal data class PhoneContract(
             val stub = Class.forName("com.android.internal.telephony.ITelephony\$Stub", false, loader)
             // 精确读取所需成员，避免枚举整套 ITelephony 并解析数百个无关方法的类型。
             val intType = Int::class.javaPrimitiveType!!
-            val base = arrayOf(intType, intType, Long::class.javaPrimitiveType!!)
+            val base = arrayOf<Class<*>>(intType, intType, Long::class.javaPrimitiveType!!)
             val methods = mutableListOf(phone.getDeclaredMethod(GETTER, intType, intType))
             for (parameters in listOf(base, base + String::class.java)) {
                 try { methods += phone.getDeclaredMethod(SETTER, *parameters) }
