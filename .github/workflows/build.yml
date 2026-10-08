@@ -1,0 +1,89 @@
+name: Build APK
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;34.0.0'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Run unit tests, lint and release shrinker
+        run: ./gradlew --no-daemon testDebugUnitTest lintDebug lintRelease assembleRelease
+
+      - name: Export runtime dependencies
+        run: ./gradlew --no-daemon :app:dependencies --configuration releaseRuntimeClasspath > app/build/release-runtime-dependencies.txt
+
+      - name: Summarize unit tests
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          reports = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.xml'))
+          assert reports, 'No unit test reports found'
+          totals = {key: 0 for key in ('tests', 'failures', 'errors', 'skipped')}
+          for report in reports:
+              suite = ET.parse(report).getroot()
+              for key in totals:
+                  totals[key] += int(suite.get(key, '0'))
+          print(totals)
+          assert totals['tests'] > 0 and totals['failures'] == 0 and totals['errors'] == 0
+          Path('app/build/unit-test-summary.txt').write_text(str(totals) + '\n')
+          PY
+
+      - name: Inspect APK signatures and flags
+        run: |
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk > app/build/release-apk-signature.txt
+          "$ANDROID_HOME/build-tools/34.0.0/aapt2" dump badging app/build/outputs/apk/release/app-release.apk > app/build/release-apk-flags.txt
+          "$ANDROID_HOME/build-tools/34.0.0/aapt2" dump badging app/build/outputs/apk/debug/app-debug.apk > app/build/debug-apk-flags.txt
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: 5GSwitch-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: 5GSwitch-release
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Upload shrinker reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: 5GSwitch-build-reports
+          path: |
+            app/build/outputs/mapping/release/
+            app/build/release-runtime-dependencies.txt
+            app/build/*-apk-*.txt
+            app/build/unit-test-summary.txt
+            app/build/test-results/testDebugUnitTest/
+          if-no-files-found: error

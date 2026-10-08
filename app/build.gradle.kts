@@ -1,0 +1,44 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "io.github.arc10p.fivegswitch"
+    compileSdk = 35
+    buildToolsVersion = "34.0.0"
+
+    defaultConfig {
+        applicationId = "io.github.arc10p.fivegswitch"
+        minSdk = 31
+        targetSdk = 35
+        versionCode = 6
+        versionName = "1.0.5"
+    }
+
+    buildTypes {
+        release {
+            isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+    buildFeatures {
+        buildConfig = true
+    }
+}
+
+dependencies {
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
+    testImplementation("junit:junit:4.13.2")
+}
